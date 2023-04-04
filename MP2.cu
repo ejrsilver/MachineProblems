@@ -37,20 +37,39 @@ CUDA Events:
 - destroy events
 */
 
-#define M_DIM 125
-#define M_SIZE M_DIM * M_DIM
+#define N 125
+#define M_SIZE N * N
 #define B_WIDTH 16
-#define N_BLOCKS M_DIM * B_WIDTH
+#define N_BLOCKS (int) (N / B_WIDTH + 0.5)
 
 __global__ void matrixAdd(float A[N][N], float B[N][N], float C[N][N]) {
-  int i = threadIdx.x;
-  int j = threadIdx.y;
-  C[i][j] = A[i][j] + B[i][j];
-}
-
-__global__ void matrixAddRow(float A[N], float B[N], float C[N]) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+  if (i < N && j < N) {
+    C[i][j] = A[i][j] + B[i][j];
+  }
+  __syncthreads();
+}
+
+__global__ void matrixAddRow(float A[N][N], float B[N][N], float C[N][N]) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  
+  if(i < N) {
+    for(int j = 0; j < N; j++) {
+      C[i][j] = A[i][j] + B[i][j];
+    }
+  }
+}
+
+__global__ void matrixAddColumn(float A[N][N], float B[N][N], float C[N][N]) {
+  int j = blockIdx.y * blockDim.y + threadIdx.y;
+  
+  if(j < N) {
+    for(int i = 0; i < N; i++) {
+      C[i][j] = A[i][j] + B[i][j];
+    }
+  }
 }
 
 int main() {
@@ -60,8 +79,8 @@ int main() {
   float** B = (float**) malloc(M_SIZE * sizeof(float*)); 
   float** C = (float**) malloc(M_SIZE * sizeof(float*));
 
-  for(int x = 0; x < M_DIM; x++) {
-    for(int y = 0; y < M_DIM; y++) {
+  for(int i = 0; i < N; i++) {
+    for(int j = 0; j < N; j++) {
       A[i][j] = rand() % 100;
       B[i][j] = rand() % 100;
     }
@@ -72,15 +91,15 @@ int main() {
   float** dev_B;
   float** dev_C;
   
-  cudaError_t gpu_error = cudaMalloc((void**) &dev_a, M_SIZE * sizeof(float*));
+  cudaError_t gpu_error = cudaMalloc((void**) &dev_A, M_SIZE * sizeof(float*));
   if (gpu_error != cudaSuccess) {
     std::cout << "Error allocating A" << std::endl;
   }
-  gpu_error = cudaMalloc((void**) &dev_b, M_SIZE * sizeof(float*));
+  gpu_error = cudaMalloc((void**) &dev_B, M_SIZE * sizeof(float*));
   if (gpu_error != cudaSuccess) {
     std::cout << "Error allocating B" << std::endl;
   }
-  gpu_error = cudaMalloc((void**) &dev_c, M_SIZE * sizeof(float*));
+  gpu_error = cudaMalloc((void**) &dev_C, M_SIZE * sizeof(float*));
   if (gpu_error != cudaSuccess) {
     std::cout << "Error allocating C" << std::endl;
   }
@@ -96,15 +115,11 @@ int main() {
   dim3 block;
 
   // Add by element
-  if(M_DIM % B_WIDTH) {
-    grid = dim3(N_BLOCKS+1, N_BLOCKS+1);
-  }
-  else {
-    grid = dim3(N_BLOCKS, N_BLOCKS);
-  }
   block = dim3(B_WIDTH, B_WIDTH);
+  grid = dim3(N_BLOCKS, N_BLOCKS);
 
   cudaEventRecord(start, 0);
+
   matrixAdd<<<grid, block>>>(A, B, C);
 
   gpu_error = cudaGetLastError();
@@ -113,13 +128,14 @@ int main() {
   }
   
   cudaEventRecord(stop, 0);
+
   cudaEventSynchronize(stop);
   cudaEventElapsedTime(&gpu_time, start, stop);
-
   std::cout << "One thread per element addition (ms): " << gpu_time << std::endl;
 
   // Add by row
-  block = dim3(B_WIDTH/4, B_WIDTH/4);
+  block = dim3(B_WIDTH, B_WIDTH);
+  grid = dim3(N/block.x, N/block.y);
 
   cudaEventRecord(start, 0);
   matrixAddRow<<<grid, block>>>(A, B, C);
@@ -156,8 +172,8 @@ int main() {
   float cpu_time = 0;
   cudaEventRecord(start, 0);
 
-  for(int x = 0; x < M_DIM; x++) {
-    for(int y = 0; y < M_DIM; y++) {
+  for(int i = 0; i < N; i++) {
+    for(int j = 0; j < N; j++) {
       float t = A[i][j] + B[i][j];
     }
   }
