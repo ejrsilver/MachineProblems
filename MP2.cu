@@ -40,171 +40,195 @@ CUDA Events:
 #define N 125
 #define M_SIZE N * N
 #define B_WIDTH 16
-#define N_BLOCKS (int) (N / B_WIDTH + 0.5)
+#define N_BLOCKS N / B_WIDTH
 
-__global__ void matrixAdd(float A[N][N], float B[N][N], float C[N][N]) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  int j = blockIdx.y * blockDim.y + threadIdx.y;
+__global__ void matrixAdd(float* A, float* B, float* C, int n) {
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-  if (i < N && j < N) {
-    C[i][j] = A[i][j] + B[i][j];
-  }
-  __syncthreads();
+	if (x < n && y < n) {
+		int i = y*n + x;
+		C[i] = A[i] + B[i];
+	}
+	__syncthreads();
 }
 
-__global__ void matrixAddRow(float A[N][N], float B[N][N], float C[N][N]) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  
-  if(i < N) {
-    for(int j = 0; j < N; j++) {
-      C[i][j] = A[i][j] + B[i][j];
-    }
-  }
+__global__ void matrixAddRow(float* A, float* B, float* C, int n) {
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (x < n) {
+		for (int y = 0; y < n; y++) {
+			int i = y*n + x;
+			C[i] = A[i] + B[i];
+		}
+	}
+	__syncthreads();
 }
 
-__global__ void matrixAddColumn(float A[N][N], float B[N][N], float C[N][N]) {
-  int j = blockIdx.y * blockDim.y + threadIdx.y;
-  
-  if(j < N) {
-    for(int i = 0; i < N; i++) {
-      C[i][j] = A[i][j] + B[i][j];
+__global__ void matrixAddColumn(float* A, float* B, float* C, int n) {
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	if (y < n) {
+		for (int x = 0; x < n; x++) {
+			int i = y*n + x;
+			C[i] = A[i] + B[i];
+		}
+	}
+	__syncthreads();
+}
+
+void cudaAdd(const float* A, const float* B, float* C, int n, int mode) {
+	int m_size = n*n;
+	// allocate gpu pointers and check for errors
+	float* dev_A;
+	float* dev_B;
+	float* dev_C;
+
+	cudaError_t gpu_error = cudaMalloc((void**)&dev_A, m_size * sizeof(float));
+
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error allocating A" << std::endl;
+	}
+	gpu_error = cudaMalloc((void**)&dev_B, m_size * sizeof(float));
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error allocating B" << std::endl;
+	}
+	gpu_error = cudaMalloc((void**)&dev_C, m_size * sizeof(float));
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error allocating C" << std::endl;
+	}
+	// copy matrices to gpu
+	gpu_error = cudaMemcpy(dev_A, A, m_size * sizeof(float), cudaMemcpyHostToDevice);
+
+	if (gpu_error != cudaSuccess) {
+		std::cout << "error allocating A video memory: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	gpu_error = cudaMemcpy(dev_B, B, m_size * sizeof(float), cudaMemcpyHostToDevice);
+
+	if (gpu_error != cudaSuccess) {
+		std::cout << "error allocating B video memory: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	cudaEvent_t start, stop;
+	float gpu_time = 0;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	dim3 grid;
+	dim3 block;
+
+	int num_blocks = n / B_WIDTH;
+	if (n%B_WIDTH) num_blocks++;
+
+	// Add by element
+  if (mode == 0) {
+    block = dim3(B_WIDTH, B_WIDTH);
+    grid = dim3(num_blocks, num_blocks);
+
+    cudaEventRecord(start, 0);
+    matrixAdd << <grid, block >> >(dev_A, dev_B, dev_C, n);
+    gpu_error = cudaGetLastError();
+    if (gpu_error != cudaSuccess) {
+      std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
     }
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_time, start, stop);
+    std::cout << "One thread per element addition (ms): " << gpu_time << std::endl;
   }
+  // Add by row
+  if (mode == 1) {
+    cudaEventRecord(start, 0);
+    matrixAddRow << <grid, block >> >(dev_A, dev_B, dev_C, n);
+
+    gpu_error = cudaGetLastError();
+    if (gpu_error != cudaSuccess) {
+      std::cout << "Error during addition by row: " << cudaGetErrorString(gpu_error) << std::endl;
+    }
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_time, start, stop);
+    std::cout << "One thread per row addition (ms): " << gpu_time << std::endl;
+  }
+	// Add by column
+  if (mode == 2) {
+    cudaEventRecord(start, 0);
+    matrixAddColumn << <grid, block >> >(dev_A, dev_B, dev_C, n);
+
+    gpu_error = cudaGetLastError();
+    if (gpu_error != cudaSuccess) {
+      std::cout << "Error during addition by column: " << cudaGetErrorString(gpu_error) << std::endl;
+    }
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&gpu_time, start, stop);
+    std::cout << "One thread per column addition (ms): " << gpu_time << std::endl;
+  }
+
+	// Add by CPU
+	float cpu_time = 0;
+	cudaEventRecord(start, 0);
+
+	for (int i = 0; i < m_size; i++) {
+		float t = A[i] + B[i];
+	}
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&cpu_time, start, stop);
+	std::cout << "CPU add time (ms): " << cpu_time << std::endl;
+
+	cudaDeviceSynchronize();
+
+	gpu_error = cudaMemcpy(C, dev_C, m_size * sizeof(float), cudaMemcpyDeviceToHost);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "error copying C back to host: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	gpu_error = cudaFree(dev_A);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "error freeing dev_A: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	gpu_error = cudaFree(dev_B);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "error freeing dev_B: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	cudaError_t c_error = cudaFree(dev_C);
+	if (c_error != cudaSuccess) {
+		std::cout << "error freeing dev_C: " << cudaGetErrorString(c_error) << std::endl;
+	}
+}
+
+int test(const float* A, const float* B, const float* C, int n) {
+	for (int i = 0; i < n*n; i++) {
+		if (A[i] + B[i] != C[i]) {
+			std::cout << "ERROR AT [" << i / n << ", " << i%n << "]: Incorrect sum. Expected: " << A[i] << " + " << B[i] << " = " << (A[i] + B[i]) << ", Result: " << C[i] << std::endl;
+			return 1;
+		}
+	}
+	std::cout << "Test passed! Addition was successful." << std::endl;
+	return 0;
 }
 
 int main() {
-  srand(time(0));
-  // init matrices and assign random values
-  float** A = (float**) malloc(M_SIZE * sizeof(float*)); 
-  float** B = (float**) malloc(M_SIZE * sizeof(float*)); 
-  float** C = (float**) malloc(M_SIZE * sizeof(float*));
+	srand(time(0));
+	// init matrices and assign random values
+	float* A = (float*)malloc(M_SIZE * sizeof(float));
+	float* B = (float*)malloc(M_SIZE * sizeof(float));
+	float* C = (float*)malloc(M_SIZE * sizeof(float));
 
-  for(int i = 0; i < N; i++) {
-    for(int j = 0; j < N; j++) {
-      A[i][j] = rand() % 100;
-      B[i][j] = rand() % 100;
-    }
-  }
+	for (int i = 0; i < M_SIZE; i++) {
+		A[i] = rand() % 1000 / 10.0;
+		B[i] = rand() % 1000 / 10.0;
+	}
+	/*
+	mode 0: Add by element
+	mode 1: Add by row
+	mode 2: Add by column
+	*/
+	cudaAdd(A, B, C, N, 0);
 
-  // allocate gpu pointers and check for errors
-  float** dev_A;
-  float** dev_B;
-  float** dev_C;
-  
-  cudaError_t gpu_error = cudaMalloc((void**) &dev_A, M_SIZE * sizeof(float*));
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error allocating A" << std::endl;
-  }
-  gpu_error = cudaMalloc((void**) &dev_B, M_SIZE * sizeof(float*));
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error allocating B" << std::endl;
-  }
-  gpu_error = cudaMalloc((void**) &dev_C, M_SIZE * sizeof(float*));
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error allocating C" << std::endl;
-  }
-  // copy matrices to gpu
-  cudaMemcpy(dev_A, A, M_SIZE * sizeof(float*), cudaMemcpyHostToDevice);
-  cudaMemcpy(dev_B, B, M_SIZE * sizeof(float*), cudaMemcpyHostToDevice);
+	test(A, B, C, N);
 
-  cudaEvent_t start, stop;
-  float gpu_time = 0;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  dim3 grid;
-  dim3 block;
+	free(A);
+	free(B);
+	free(C);
 
-  // Add by element
-  block = dim3(B_WIDTH, B_WIDTH);
-  grid = dim3(N_BLOCKS, N_BLOCKS);
-
-  cudaEventRecord(start, 0);
-
-  matrixAdd<<<grid, block>>>(A, B, C);
-
-  gpu_error = cudaGetLastError();
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
-  }
-  
-  cudaEventRecord(stop, 0);
-
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&gpu_time, start, stop);
-  std::cout << "One thread per element addition (ms): " << gpu_time << std::endl;
-
-  // Add by row
-  block = dim3(B_WIDTH, B_WIDTH);
-  grid = dim3(N/block.x, N/block.y);
-
-  cudaEventRecord(start, 0);
-  matrixAddRow<<<grid, block>>>(A, B, C);
-
-  gpu_error = cudaGetLastError();
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error during addition by row: " << cudaGetErrorString(gpu_error) << std::endl;
-  }
-  
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&gpu_time, start, stop);
-  
-  std::cout << "One thread per row addition (ms): " << gpu_time << std::endl;
-
-  // Add by column
-  block = dim3(B_WIDTH/4, B_WIDTH/4);
-
-  cudaEventRecord(start, 0);
-  matrixAddColumn<<<grid, block>>>(A, B, C);
-
-  gpu_error = cudaGetLastError();
-  if (gpu_error != cudaSuccess) {
-    std::cout << "Error during addition by column: " << cudaGetErrorString(gpu_error) << std::endl;
-  }
-  
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&gpu_time, start, stop);
-  
-  std::cout << "One thread per column addition (ms): " << gpu_time << std::endl;
-
-  // Add by CPU
-  float cpu_time = 0;
-  cudaEventRecord(start, 0);
-
-  for(int i = 0; i < N; i++) {
-    for(int j = 0; j < N; j++) {
-      float t = A[i][j] + B[i][j];
-    }
-  }
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&cpu_time, start, stop);
-  std::cout << "CPU add time (ms): " << cpu_time << std::endl;
-
-  cudaDeviceSynchronize();
-
-  gpu_error = cudaMemcpy(C, dev_C, M_SIZE * sizeof(float*), cudaMemcpyDeviceToHost);
-  if (gpu_error != cudaSuccess) {
-    std::cout << "error copying C back to host" << std::endl;
-  }
-
-	gpu_error = cudaFree(dev_A);
-	if (gpu_error != cudaSuccess) {
-    std::cout << "error freeing dev_A" << std::endl;
-  }
-	gpu_error = cudaFree(dev_B);
-	if (gpu_error != cudaSuccess) {
-    std::cout << "error freeing dev_B" << std::endl;
-  }
-	gpu_error = cudaFree(dev_C);
-	if (gpu_error != cudaSuccess) {
-    std::cout << "error freeing dev_C" << std::endl;
-  }
-
-  free(A);
-  free(B);
-  free(C);
-
-  return 0;
+	return 0;
 }
