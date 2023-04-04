@@ -9,12 +9,13 @@
 /*
 Problem 2: Matrix Addition
 
-Steps:
+Steps: - DONE
 1. Allocate input and output in host code
 2. kernel with one output matrix element per thread (16x16 thread blocks)
 3. kernel with one output matrix row (16 threads per block)
 4. kernel with one output matrix column (16 threads per block)
-5. Analyse pros and cons of above approaches
+
+Analyse pros and cons of above approaches
 
 Create Random matrices A and B:
 - 125x125
@@ -28,7 +29,7 @@ Analytics:
 - execute multiple times and report averages/remove outliers
 - compare CPU and GPU performance using graphs/tables
 
-CUDA Events:
+CUDA Events: - DONE
 - start time
 - stop time
 - begin recording
@@ -37,10 +38,7 @@ CUDA Events:
 - destroy events
 */
 
-#define N 125
-#define M_SIZE N * N
 #define B_WIDTH 16
-#define N_BLOCKS N / B_WIDTH
 
 __global__ void matrixAdd(float* A, float* B, float* C, int n) {
 	int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -110,70 +108,86 @@ void cudaAdd(const float* A, const float* B, float* C, int n, int mode) {
 	}
 	cudaEvent_t start, stop;
 	float gpu_time = 0;
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
+	gpu_error = cudaEventCreate(&start);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error creating start event: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	gpu_error = cudaEventCreate(&stop);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error creating stop event: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
 	dim3 grid;
 	dim3 block;
 
 	int num_blocks = n / B_WIDTH;
 	if (n%B_WIDTH) num_blocks++;
 
+	block = dim3(B_WIDTH, B_WIDTH);
+	grid = dim3(num_blocks, num_blocks);
+
 	// Add by element
-  if (mode == 0) {
-    block = dim3(B_WIDTH, B_WIDTH);
-    grid = dim3(num_blocks, num_blocks);
+	if (mode == 0) {
+		cudaEventRecord(start, 0);
+		matrixAdd << <grid, block >> >(dev_A, dev_B, dev_C, n);
+		gpu_error = cudaGetLastError();
+		if (gpu_error != cudaSuccess) {
+			std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
+		}
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&gpu_time, start, stop);
+		std::cout << "One thread per element addition (ms): " << gpu_time << std::endl;
+	}
+	// Add by row
+	if (mode == 1) {
+		cudaEventRecord(start, 0);
+		matrixAddRow << <grid, block >> >(dev_A, dev_B, dev_C, n);
 
-    cudaEventRecord(start, 0);
-    matrixAdd << <grid, block >> >(dev_A, dev_B, dev_C, n);
-    gpu_error = cudaGetLastError();
-    if (gpu_error != cudaSuccess) {
-      std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
-    }
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    std::cout << "One thread per element addition (ms): " << gpu_time << std::endl;
-  }
-  // Add by row
-  if (mode == 1) {
-    cudaEventRecord(start, 0);
-    matrixAddRow << <grid, block >> >(dev_A, dev_B, dev_C, n);
-
-    gpu_error = cudaGetLastError();
-    if (gpu_error != cudaSuccess) {
-      std::cout << "Error during addition by row: " << cudaGetErrorString(gpu_error) << std::endl;
-    }
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    std::cout << "One thread per row addition (ms): " << gpu_time << std::endl;
-  }
+		gpu_error = cudaGetLastError();
+		if (gpu_error != cudaSuccess) {
+			std::cout << "Error during addition by row: " << cudaGetErrorString(gpu_error) << std::endl;
+		}
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&gpu_time, start, stop);
+		std::cout << "One thread per row addition (ms): " << gpu_time << std::endl;
+	}
 	// Add by column
-  if (mode == 2) {
-    cudaEventRecord(start, 0);
-    matrixAddColumn << <grid, block >> >(dev_A, dev_B, dev_C, n);
+	if (mode == 2) {
+		cudaEventRecord(start, 0);
+		matrixAddColumn << <grid, block >> >(dev_A, dev_B, dev_C, n);
 
-    gpu_error = cudaGetLastError();
-    if (gpu_error != cudaSuccess) {
-      std::cout << "Error during addition by column: " << cudaGetErrorString(gpu_error) << std::endl;
-    }
-    cudaEventRecord(stop, 0);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&gpu_time, start, stop);
-    std::cout << "One thread per column addition (ms): " << gpu_time << std::endl;
-  }
+		gpu_error = cudaGetLastError();
+		if (gpu_error != cudaSuccess) {
+			std::cout << "Error during addition by column: " << cudaGetErrorString(gpu_error) << std::endl;
+		}
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&gpu_time, start, stop);
+		std::cout << "One thread per column addition (ms): " << gpu_time << std::endl;
+	}
 
 	// Add by CPU
-	float cpu_time = 0;
-	cudaEventRecord(start, 0);
+	if (mode == 3) {
+		float cpu_time = 0;
+		cudaEventRecord(start, 0);
 
-	for (int i = 0; i < m_size; i++) {
-		float t = A[i] + B[i];
+		for (int i = 0; i < m_size; i++) {
+			float t = A[i] + B[i];
+		}
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&cpu_time, start, stop);
+		std::cout << "CPU add time (ms): " << cpu_time << std::endl;
 	}
-	cudaEventRecord(stop, 0);
-	cudaEventSynchronize(stop);
-	cudaEventElapsedTime(&cpu_time, start, stop);
-	std::cout << "CPU add time (ms): " << cpu_time << std::endl;
+	gpu_error = cudaEventDestroy(start);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error destroying start event: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
+	gpu_error = cudaEventDestroy(stop);
+	if (gpu_error != cudaSuccess) {
+		std::cout << "Error destroying stop event: " << cudaGetErrorString(gpu_error) << std::endl;
+	}
 
 	cudaDeviceSynchronize();
 
@@ -195,40 +209,73 @@ void cudaAdd(const float* A, const float* B, float* C, int n, int mode) {
 	}
 }
 
-int test(const float* A, const float* B, const float* C, int n) {
+int testAdd(const float* A, const float* B, const float* C, int n) {
 	for (int i = 0; i < n*n; i++) {
 		if (A[i] + B[i] != C[i]) {
 			std::cout << "ERROR AT [" << i / n << ", " << i%n << "]: Incorrect sum. Expected: " << A[i] << " + " << B[i] << " = " << (A[i] + B[i]) << ", Result: " << C[i] << std::endl;
 			return 1;
 		}
 	}
-	std::cout << "Test passed! Addition was successful." << std::endl;
 	return 0;
 }
 
-int main() {
-	srand(time(0));
-	// init matrices and assign random values
-	float* A = (float*)malloc(M_SIZE * sizeof(float));
-	float* B = (float*)malloc(M_SIZE * sizeof(float));
-	float* C = (float*)malloc(M_SIZE * sizeof(float));
+void MatrixNAdd(int n) {
+	float* A;
+	float* B;
+	float* C;
 
-	for (int i = 0; i < M_SIZE; i++) {
+	// Initialize 125 x 125 matrix
+	int m_size = n*n;
+	// init matrices and assign random values
+	A = (float*)malloc(m_size * sizeof(float));
+	B = (float*)malloc(m_size * sizeof(float));
+	C = (float*)malloc(m_size * sizeof(float));
+
+	for (int i = 0; i < m_size; i++) {
 		A[i] = rand() % 1000 / 10.0;
 		B[i] = rand() % 1000 / 10.0;
 	}
-	/*
-	mode 0: Add by element
-	mode 1: Add by row
-	mode 2: Add by column
-	*/
-	cudaAdd(A, B, C, N, 0);
 
-	test(A, B, C, N);
+	std::cout << "Testing for matrix size: " << n << " x " << n << std::endl;
+
+	// Add by element
+	cudaAdd(A, B, C, n, 0);
+	int testout = testAdd(A, B, C, n);
+	// Add by row
+	cudaAdd(A, B, C, n, 1);
+	testout += testAdd(A, B, C, n);
+	// Add by column
+	cudaAdd(A, B, C, n, 2);
+	testout += testAdd(A, B, C, n);
+	// Add by CPU
+	cudaAdd(A, B, C, n, 3);
+	testout += testAdd(A, B, C, n);
+
+	if (testout == 0) {
+		std::cout << "Test passed!" << std::endl;
+	}
+	else {
+		std::cout << "Test failed!" << std::endl;
+	}
 
 	free(A);
 	free(B);
 	free(C);
 
+}
+
+int main() {
+	// init pseudorandom generator so that A and B will not be identical every time
+	srand(time(0));
+	// 125x125
+	MatrixNAdd(125);
+	// 250x250
+	MatrixNAdd(250);
+	// 500x500
+	MatrixNAdd(500);	
+	//1000x1000
+	MatrixNAdd(1000);	
+	//2000x2000
+	MatrixNAdd(2000);
 	return 0;
 }
