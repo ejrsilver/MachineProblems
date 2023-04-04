@@ -1,6 +1,6 @@
 #include "cuda_runtime.h"
 #include <stdio.h>
-
+#include <iostream>
 /*
 Problem 1: Device Query
 - # CUDA devices
@@ -19,10 +19,10 @@ Problem 1: Device Query
 */
 
 int CoreCount (cudaDeviceProp prop) {
-  int mul = temp.multiProcessorCount;
-  switch (devProp.major) {
+  int mul = prop.multiProcessorCount;
+  switch (prop.major) {
     case 2:
-      if (temp.minor == 1)
+      if (prop.minor == 1)
         return mul*48;
       else
         return mul*32;
@@ -34,13 +34,13 @@ int CoreCount (cudaDeviceProp prop) {
       return mul*128;
       break;
     case 6:
-      if (devProp.minor == 1 || devProp.minor == 2)
+      if (prop.minor == 1 || prop.minor == 2)
         return mul*128;
-      else if (devProp.minor == 0)
+      else if (prop.minor == 0)
         return mul*64;
       break;
     case 7:
-      if (devProp.minor == 0 || devProp.minor == 5)
+      if (prop.minor == 0 || prop.minor == 5)
         return mul*64;
       break;
   }
