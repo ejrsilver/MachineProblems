@@ -90,7 +90,7 @@ void cudaMul(const float* M, const float* N, float* P, int n, int b_width) {
 	cudaEventRecord(start, 0);
 	matrixMul << <grid, block >> >(dev_M, dev_N, dev_P, n);
 	gpu_error = cudaGetLastError();
-	if (gpu_error != cudaSuccess) std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
+	if (gpu_error != cudaSuccess) std::cout << "Error during multiplication: " << cudaGetErrorString(gpu_error) << std::endl;
 	cudaEventRecord(stop, 0);
 	cudaEventSynchronize(stop);
 	cudaEventElapsedTime(&compute_time, start, stop);
@@ -130,7 +130,7 @@ int testMul(const float* M, const float* N, const float* P, int n) {
 				temp += M[x*n + q] * N[q*n + y];
 			}
 			if (P[x*n + y] != temp) {
-				std::cout << "ERROR AT [" << x << ", " << y << "]: Incorrect sum. Expected: " << temp << ", Result: " << P[x*n + y] << std::endl;
+				std::cout << "ERROR AT [" << x << ", " << y << "]: Incorrect product. Expected: " << temp << ", Result: " << P[x*n + y] << std::endl;
 				return 1;
 			}
 		}

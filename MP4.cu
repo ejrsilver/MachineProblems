@@ -6,136 +6,59 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+#define TILE_WIDTH 10
+
 /*
-Problem 3: Matrix Multiplication
+Problem 4: Tiled Matrix Multiplication
 Sizes:
 - 125x125
 - 250x250
 - 500x500
 - 1000x1000
 - 2000x2000
-Steps:
-- 2 square input matrices M and N, output matrix P
-- Find host to device time
-- Find device to host time
-- Compare matrix multiplication for GPU and CPU (single block 1 thread for the block)
-- if all time is accounted for, is multiplication on GPU always worth it?
-Block Widths:
+Bonus: (tile size 8x15)
+- 350x400 400x500
+- 1900x1600 1600x1300
+Tile Widths:
 - 2
-- 4
+- 5
 - 10
 - 20
 - 25
 */
 
-__global__ void matrixMul(float* M, float* N, float* P, int n) {
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
+__global__ void matrixMul(float* M, float* N, float* P, int Mr, int Mc, int Nr, int Nc, int Cr, int Cc) {
+	__shared__ float M_s[TILE_WIDTH][TILE_WIDTH];
+	__shared__ float N_s[TILE_WIDTH][TILE_WIDTH];
 
-	if (x < n && y < n) {
-		float temp = 0;
-		for (int q = 0; q < n; q++) {
-			temp += M[y*n + q] * N[q*n + x];
+	int row = blockIdx.y * TILE_WIDTH + threadIdx.y;
+	int col = blockIdx.x * TILE_WIDTH + threadIdx.x;
+	float temp = 0;
+
+	for (int i = 0; i < (TILE_WIDTH + Mc - 1) / TILE_WIDTH; i++) {
+		if (i*TILE_WIDTH + threadIdx.x < Mc && row < Mr) {
+			M_s[threadIdx.y][threadIdx.x] = M[row*Mc + i*TILE_WIDTH + threadIdx.x];
 		}
-		P[y*n + x] = temp;
-	}
-	__syncthreads();
-}
-
-void cudaMul(const float* M, const float* N, float* P, int n, int b_width) {
-	int m_size = n*n;
-	// allocate gpu pointers and check for errors
-	float* dev_M;
-	float* dev_N;
-	float* dev_P;
-
-	// Allocate GPU memory
-	cudaError_t gpu_error;
-	gpu_error = cudaMalloc((void**)&dev_M, m_size * sizeof(float));
-	if (gpu_error != cudaSuccess) std::cout << "Error allocating A" << std::endl;
-	gpu_error = cudaMalloc((void**)&dev_N, m_size * sizeof(float));
-	if (gpu_error != cudaSuccess) std::cout << "Error allocating B" << std::endl;
-	gpu_error = cudaMalloc((void**)&dev_P, m_size * sizeof(float));
-	if (gpu_error != cudaSuccess)	std::cout << "Error allocating C" << std::endl;
-
-	// Initialize timer functionality
-	cudaEvent_t start, stop;
-	float compute_time = 0;
-	float h2d_time = 0;
-	float d2h_time = 0;
-
-	gpu_error = cudaEventCreate(&start);
-	if (gpu_error != cudaSuccess) std::cout << "Error creating start event: " << cudaGetErrorString(gpu_error) << std::endl;
-	gpu_error = cudaEventCreate(&stop);
-	if (gpu_error != cudaSuccess) std::cout << "Error creating stop event: " << cudaGetErrorString(gpu_error) << std::endl;
-
-	// copy matrices to gpu
-	cudaEventRecord(start, 0);
-	gpu_error = cudaMemcpy(dev_M, M, m_size * sizeof(float), cudaMemcpyHostToDevice);
-	if (gpu_error != cudaSuccess) std::cout << "error allocating A video memory: " << cudaGetErrorString(gpu_error) << std::endl;
-	gpu_error = cudaMemcpy(dev_N, N, m_size * sizeof(float), cudaMemcpyHostToDevice);
-	if (gpu_error != cudaSuccess) std::cout << "error allocating B video memory: " << cudaGetErrorString(gpu_error) << std::endl;
-	cudaEventRecord(stop, 0);
-	cudaEventSynchronize(stop);
-	cudaEventElapsedTime(&h2d_time, start, stop);
-	std::cout << "Copy Host to Device time (ms): " << h2d_time << std::endl;
-
-	// Initialize grid and blocks
-	int num_blocks = n / b_width;
-	if (n%b_width) num_blocks++;
-	dim3 block = dim3(b_width, b_width);
-	dim3 grid = dim3(num_blocks, num_blocks);
-
-	// Multiply with GPU
-	cudaEventRecord(start, 0);
-	matrixMul << <grid, block >> >(dev_M, dev_N, dev_P, n);
-	gpu_error = cudaGetLastError();
-	if (gpu_error != cudaSuccess) std::cout << "Error during addition by element: " << cudaGetErrorString(gpu_error) << std::endl;
-	cudaEventRecord(stop, 0);
-	cudaEventSynchronize(stop);
-	cudaEventElapsedTime(&compute_time, start, stop);
-	std::cout << "GPU compute time (ms): " << compute_time << std::endl;
-
-	cudaDeviceSynchronize();
-
-	// Copy back to host
-	cudaEventRecord(start, 0);
-	gpu_error = cudaMemcpy(P, dev_P, m_size * sizeof(float), cudaMemcpyDeviceToHost);
-	if (gpu_error != cudaSuccess) std::cout << "error copying P back to host: " << cudaGetErrorString(gpu_error) << std::endl;
-	cudaEventRecord(stop, 0);
-	cudaEventSynchronize(stop);
-	cudaEventElapsedTime(&d2h_time, start, stop);
-	std::cout << "Copy Device to Host time (ms): " << d2h_time << std::endl;
-
-	// Destroy start and stop events
-	gpu_error = cudaEventDestroy(start);
-	if (gpu_error != cudaSuccess) std::cout << "Error destroying start event: " << cudaGetErrorString(gpu_error) << std::endl;
-	gpu_error = cudaEventDestroy(stop);
-	if (gpu_error != cudaSuccess) std::cout << "Error destroying stop event: " << cudaGetErrorString(gpu_error) << std::endl;
-
-	// Free GPU memory
-	gpu_error = cudaFree(dev_M);
-	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_M: " << cudaGetErrorString(gpu_error) << std::endl;
-	gpu_error = cudaFree(dev_N);
-	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_N: " << cudaGetErrorString(gpu_error) << std::endl;
-	gpu_error = cudaFree(dev_P);
-	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_P: " << cudaGetErrorString(gpu_error) << std::endl;
-}
-
-int testMul(const float* M, const float* N, const float* P, int n) {
-	for (int x = 0; x < n; x++) {
-		for (int y = 0; y < n; y++) {
-			float temp = 0;
-			for (int q = 0; q < n; q++) {
-				temp += M[x*n + q] * N[q*n + y];
-			}
-			if (P[x*n + y] != temp) {
-				std::cout << "ERROR AT [" << x << ", " << y << "]: Incorrect sum. Expected: " << temp << ", Result: " << P[x*n + y] << std::endl;
-				return 1;
-			}
+		else {
+			M_s[threadIdx.y][threadIdx.x] = 0.0;
 		}
+
+		if (i*TILE_WIDTH + threadIdx.y < Nr && col < Nc) {
+			N_s[threadIdx.y][threadIdx.x] = N[(i*TILE_WIDTH + threadIdx.y)*Nc + col];
+		}
+		else {
+			N_s[threadIdx.y][threadIdx.x] = 0.0;
+		}
+		__syncthreads();
+
+		for (int q = 0; q < TILE_WIDTH; ++q) {
+			temp += M_s[threadIdx.y][q] * N_s[q][threadIdx.x];
+		}
+		__syncthreads();
 	}
-	return 0;
+	if (row < Cr && col < Cc) {
+		P[(blockIdx.y*blockDim.y + threadIdx.y)*Cc + blockIdx.x*blockDim.x + threadIdx.x] = temp;
+	}
 }
 
 int cpuMul(const float* M, const float* N, float* P, int n) {
@@ -150,7 +73,7 @@ int cpuMul(const float* M, const float* N, float* P, int n) {
 		for (int y = 0; y < n; y++) {
 			float temp = 0;
 			for (int q = 0; q < n; q++) {
-				temp += M[y*n + q] * N[q*n + x];
+				temp += M[x*n + q] * N[q*n + y];
 			}
 			P[x*n + y] = temp;
 		}
@@ -164,6 +87,90 @@ int cpuMul(const float* M, const float* N, float* P, int n) {
 	cudaEventDestroy(stop);
 
 	return 0;
+}
+
+int testMul(const float* M, const float* N, const float* P, int n) {
+	for (int x = 0; x < n; x++) {
+		for (int y = 0; y < n; y++) {
+			float temp = 0;
+			for (int q = 0; q < n; q++) {
+				temp += M[x*n + q] * N[q*n + y];
+			}
+			if (P[x*n + y] != temp) {
+				std::cout << "ERROR AT [" << x << ", " << y << "]: Incorrect product. Expected: " << temp << ", Result: " << P[x*n + y] << std::endl;
+				return 1;
+			}
+		}
+	}
+	return 0;
+}
+
+void cudaMul(const float* M, const float* N, float* P, int n) {
+	int m_size = n*n;
+	// allocate gpu pointers and check for errors
+	float* dev_M;
+	float* dev_N;
+	float* dev_P;
+
+	// Allocate GPU memory
+	cudaError_t gpu_error;
+	gpu_error = cudaMalloc((void**)&dev_M, m_size * sizeof(float));
+	if (gpu_error != cudaSuccess) std::cout << "Error allocating M" << std::endl;
+	gpu_error = cudaMalloc((void**)&dev_N, m_size * sizeof(float));
+	if (gpu_error != cudaSuccess) std::cout << "Error allocating N" << std::endl;
+	gpu_error = cudaMalloc((void**)&dev_P, m_size * sizeof(float));
+	if (gpu_error != cudaSuccess)	std::cout << "Error allocating P" << std::endl;
+
+	// Initialize timer functionality
+	cudaEvent_t start, stop;
+	float compute_time = 0;
+
+	gpu_error = cudaEventCreate(&start);
+	if (gpu_error != cudaSuccess) std::cout << "Error creating start event: " << cudaGetErrorString(gpu_error) << std::endl;
+	gpu_error = cudaEventCreate(&stop);
+	if (gpu_error != cudaSuccess) std::cout << "Error creating stop event: " << cudaGetErrorString(gpu_error) << std::endl;
+
+	// copy matrices to gpu
+	gpu_error = cudaMemcpy(dev_M, M, m_size * sizeof(float), cudaMemcpyHostToDevice);
+	if (gpu_error != cudaSuccess) std::cout << "error allocating M video memory: " << cudaGetErrorString(gpu_error) << std::endl;
+	gpu_error = cudaMemcpy(dev_N, N, m_size * sizeof(float), cudaMemcpyHostToDevice);
+	if (gpu_error != cudaSuccess) std::cout << "error allocating N video memory: " << cudaGetErrorString(gpu_error) << std::endl;
+
+	// Initialize grid and blocks
+	int num_blocks = n / TILE_WIDTH;
+	if (n%TILE_WIDTH) num_blocks++;
+	dim3 block = dim3(TILE_WIDTH, TILE_WIDTH);
+	dim3 grid = dim3(num_blocks, num_blocks);
+
+	// Multiply with GPU
+	cudaEventRecord(start, 0);
+	matrixMul << <grid, block >> >(dev_M, dev_N, dev_P, n, n, n, n, n, n);
+	gpu_error = cudaGetLastError();
+	if (gpu_error != cudaSuccess) std::cout << "Error during multiplication: " << cudaGetErrorString(gpu_error) << std::endl;
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&compute_time, start, stop);
+	std::cout << "GPU compute time (ms): " << compute_time << std::endl;
+
+	cudaDeviceSynchronize();
+
+	// Copy back to host
+	gpu_error = cudaMemcpy(P, dev_P, m_size * sizeof(float), cudaMemcpyDeviceToHost);
+	if (gpu_error != cudaSuccess) std::cout << "error copying P back to host: " << cudaGetErrorString(gpu_error) << std::endl;
+
+	// Destroy start and stop events
+	gpu_error = cudaEventDestroy(start);
+	if (gpu_error != cudaSuccess) std::cout << "Error destroying start event: " << cudaGetErrorString(gpu_error) << std::endl;
+	gpu_error = cudaEventDestroy(stop);
+	if (gpu_error != cudaSuccess) std::cout << "Error destroying stop event: " << cudaGetErrorString(gpu_error) << std::endl;
+
+	// Free GPU memory
+	gpu_error = cudaFree(dev_M);
+	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_M: " << cudaGetErrorString(gpu_error) << std::endl;
+	gpu_error = cudaFree(dev_N);
+	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_N: " << cudaGetErrorString(gpu_error) << std::endl;
+	gpu_error = cudaFree(dev_P);
+	if (gpu_error != cudaSuccess) std::cout << "error freeing dev_P: " << cudaGetErrorString(gpu_error) << std::endl;
 }
 
 void MatrixNMul(int n) {
@@ -186,26 +193,10 @@ void MatrixNMul(int n) {
 	std::cout << "Testing for matrix size: " << n << " x " << n << std::endl;
 
 	// Multiply
-	std::cout << "Block size: " << 1 << std::endl;
-	cudaMul(M, N, P, n, 1);
-	testout += testMul(M, N, P, n);
-	std::cout << "Block size: " << 2 << std::endl;
-	cudaMul(M, N, P, n, 2);	
-	testout += testMul(M, N, P, n);
-	std::cout << "Block size: " << 4 << std::endl;
-	cudaMul(M, N, P, n, 4);
-	testout += testMul(M, N, P, n);
-	std::cout << "Block size: " << 10 << std::endl;
-	cudaMul(M, N, P, n, 10);
-	testout += testMul(M, N, P, n);
-	std::cout << "Block size: " << 20 << std::endl;
-	cudaMul(M, N, P, n, 20);
-	testout += testMul(M, N, P, n);
-	std::cout << "Block size: " << 25 << std::endl;
-	cudaMul(M, N, P, n, 25);
+	std::cout << "Tile size: " << TILE_WIDTH << std::endl;
+	cudaMul(M, N, P, n);
 	testout += testMul(M, N, P, n);
 	cpuMul(M, N, P, n);
-	testout += testMul(M, N, P, n);
 	if (testout == 0) std::cout << "Test passed!" << std::endl;
 	else std::cout << "Test failed!" << std::endl;
 
